@@ -10,3 +10,17 @@ idna==2.10
 urllib3==2.3.0
 python-magic
 python-dotenv
+certifi==2025.1.31
+charset-normalizer==3.4.1
+gspread
+idna==2.10
+oauth2client
+python-dotenv
+python-magic
+python-telegram-bot[job-queue]==22.3
+pytz==2025.2
+requests==2.32.3
+rsa==4.9.1
+six==1.17.0
+telegram
+urllib3==2.3.0
