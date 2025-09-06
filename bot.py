@@ -136,11 +136,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            text=welcome_message,
-            reply_markup=reply_markup,
-            **welcome_options
-        )
+        try:
+            await update.callback_query.edit_message_text(
+                text=welcome_message,
+                reply_markup=reply_markup,
+                **welcome_options
+            )
+        except Exception:
+            # If editing fails (e.g., message is a photo), send a new message
+            await update.callback_query.message.reply_text(
+                text=welcome_message,
+                reply_markup=reply_markup,
+                **welcome_options
+            )
     else:
         await update.message.reply_text(
             text=welcome_message,
@@ -166,7 +174,11 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     message_options = MESSAGES['payment_details_message']['options']
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(text=message_text, reply_markup=reply_markup, **message_options)
+        try:
+            await update.callback_query.edit_message_text(text=message_text, reply_markup=reply_markup, **message_options)
+        except Exception:
+            # If editing fails (e.g., message is a photo), send a new message
+            await update.callback_query.message.reply_text(text=message_text, reply_markup=reply_markup, **message_options)
     else:
         await update.message.reply_text(text=message_text, reply_markup=reply_markup, **message_options)
 
@@ -190,7 +202,11 @@ async def lesson_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(text=lesson_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+        try:
+            await update.callback_query.edit_message_text(text=lesson_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+        except Exception:
+            # If editing fails (e.g., message is a photo), send a new message
+            await update.callback_query.message.reply_text(text=lesson_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text(text=lesson_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
@@ -210,7 +226,11 @@ async def question_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(text=question_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        try:
+            await update.callback_query.edit_message_text(text=question_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        except Exception:
+            # If editing fails (e.g., message is a photo), send a new message
+            await update.callback_query.message.reply_text(text=question_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
     else:
         await update.message.reply_text(text=question_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
@@ -301,7 +321,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='purchase')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.edit_message_text(text=text, reply_markup=reply_markup, **options)
+        try:
+            await query.edit_message_text(text=text, reply_markup=reply_markup, **options)
+        except Exception:
+            # If editing fails (e.g., message is a photo), send a new message
+            await query.message.reply_text(text=text, reply_markup=reply_markup, **options)
 
     elif data_type == 'back_to_menu':
         await start(update, context)
