@@ -33,13 +33,17 @@ def create_quiz_image(data):
     UI = config.UI_SETTINGS
     SC = config.UI_SCALES
     
-    # 1. Оптимизация фона и статических элементов
-    bg_color = (random.randint(235, 250), random.randint(235, 250), random.randint(240, 255))
-    
-    # Кэшируем базовое изображение с футером, если цвет фона не изменился (но у нас он случайный)
-    # Однако мы можем создать чистый холст и нарисовать статику один раз
-    img = Image.new('RGB', (W, H), bg_color)
+    lvl_col = config.LEVEL_COLORS.get(str(data.get('level')), (46, 204, 113))
+    img = Image.new('RGB', (W, H), lvl_col)
     d = ImageDraw.Draw(img)
+    
+    pad = int(min(W, H) * 0.055)
+    card_radius = int(min(W, H) * 0.06)
+    d.rounded_rectangle(
+        [pad, pad, W - pad, H - pad],
+        radius=card_radius,
+        fill=(255, 255, 255)
+    )
 
     GROUP_MAP = {
         "category": "topic",
@@ -48,7 +52,7 @@ def create_quiz_image(data):
         "footer_hint": "hint"
     }
 
-    def draw_t(draw_obj, cfg_key, text, anchor="mm", x=None):
+    def draw_t(draw_obj, cfg_key, text, anchor="mm", x=None, y=None):
         if not text: return
         cfg = UI[cfg_key]
         group = GROUP_MAP.get(cfg_key)
@@ -57,7 +61,7 @@ def create_quiz_image(data):
         font = get_font(text, cfg.get("weight"), abs_size)
         
         pos_x = (x if x is not None else cfg["pos"][0]) * W
-        pos_y = cfg["pos"][1] * H
+        pos_y = (y if y is not None else cfg["pos"][1]) * H
 
         max_w_px = None
         if cfg_key in ("main_text_ru", "main_text_kr"):
@@ -91,34 +95,25 @@ def create_quiz_image(data):
         else:
             draw_obj.text((pos_x, pos_y), str(text), fill=cfg["color"], font=font, anchor=anchor)
 
-    # Статика (Линия футера и бренд)
-    line = UI["footer_line"]
-    line_y = line["y"] * H
-    margin = line["margin"] * W
-    d.line([(margin, line_y), (W - margin, line_y)], fill=line["color"], width=int(line["width"] * H))
-    
-    draw_t(d, "footer_brand", config.BRAND_NAME, x=0.5)
-    draw_t(d, "footer_hint", "ВЫБЕРИТЕ ПРАВИЛЬНЫЙ ОТВЕТ НИЖЕ", x=0.5)
-    draw_t(d, "footer_arrow", UI["footer_arrow"]["char"], anchor="ms", x=0.5)
-
     # Динамика
-    draw_t(d, "category", f"TEMA: {data['category']}", anchor="la")
+    draw_t(d, "category", f"Тема: {data['category']}", anchor="mm", x=0.5, y=UI["category"]["pos"][1] + 0.05)
     
     # Уровень
     circ = UI["level_circle"]
-    lvl_col = config.LEVEL_COLORS.get(str(data['level']), (200, 200, 200))
-    cx, cy = circ["pos"][0] * W, circ["pos"][1] * H
+    lvl_dx = 0.03
+    lvl_dy = 0.03
+    cx, cy = (circ["pos"][0] + lvl_dx) * W, (circ["pos"][1] + lvl_dy) * H
     cr = circ["radius"] * H * SC["level"]
     d.ellipse((cx-cr, cy-cr, cx+cr, cy+cr), fill=lvl_col)
-    draw_t(d, "level_num", data['level'])
-    draw_t(d, "level_label", "УРОВЕНЬ")
+    draw_t(d, "level_num", data['level'], x=(circ["pos"][0] + lvl_dx), y=(circ["pos"][1] + lvl_dy))
+    draw_t(d, "level_label", "УРОВЕНЬ", x=(UI["level_label"]["pos"][0] + lvl_dx), y=(UI["level_label"]["pos"][1] + lvl_dy))
 
     # Текст
     has_kr = bool(re.search(r'[\uac00-\ud7af\u3130-\u318f]', str(data['main_text'])))
     main_cfg_key = "main_text_kr" if has_kr else "main_text_ru"
-    draw_t(d, main_cfg_key, data['main_text'], anchor="ms", x=0.5)
+    draw_t(d, main_cfg_key, data['main_text'], anchor="ms", x=0.5, y=0.62)
     if data.get("transcription"): 
-        draw_t(d, "transcription", data['transcription'], anchor="ms", x=0.5)
+        draw_t(d, "transcription", data['transcription'], anchor="ms", x=0.5, y=0.80)
 
     # Сохранение в JPG с оптимизацией
     path = "quiz_out.jpg"
