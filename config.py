@@ -8,7 +8,7 @@ load_dotenv()
 # --- БЛОК 1: СИСТЕМНЫЕ НАСТРОЙКИ ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-TIMEZONE_OFFSET = 3   # Московское время (UTC+3)
+TIMEZONE_OFFSET = 9   # Корейское время (UTC+9)
 KOREA_TIMEZONE = "Asia/Seoul"  # Корейское время (UTC+9)
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@koreanstepTG")
 # CHANNEL_ID_INTERNAL = -1003773480771 # Внутренний ID для некоторых методов, если @username не сработает
@@ -89,7 +89,7 @@ SCHEDULER_MODE = "fixed"  # "fixed" или "interval"
 FIXED_TIMES = ["09:31", "13:31", "18:31"]
 INTERVAL_MINUTES = 15
 QUIZ_TIME = "21:30"
-WEEKLY_TOP_TIME = "09:30"
+WEEKLY_TOP_TIME = "09:35"
 WEEKEND_PROMO_TIME = "09:30"
 
 # --- СООБЩЕНИЯ И УВЕДОМЛЕНИЯ ---

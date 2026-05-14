@@ -839,11 +839,11 @@ async def cmd_weekend(m: types.Message):
 async def main():
     await init_db()
     
-    # Настройка часового пояса (МСК)
-    msk_tz = timezone(timedelta(hours=config.TIMEZONE_OFFSET))
+    # Настройка часового пояса (Корея)
+    korea_tz = pytz.timezone(config.KOREA_TIMEZONE)
     
     # Настройка APScheduler
-    scheduler_obj = AsyncIOScheduler(timezone=msk_tz)
+    scheduler_obj = AsyncIOScheduler(timezone=korea_tz)
     
     # 1. Посты с карточками (интервал или фиксированное время)
     if config.SCHEDULER_MODE == "interval":
