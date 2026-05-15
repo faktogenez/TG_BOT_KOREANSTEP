@@ -107,6 +107,8 @@ async def init_db():
                  (user_id INTEGER PRIMARY KEY, score INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, max_streak INTEGER DEFAULT 0)''', commit=True)
     await db.execute('''CREATE TABLE IF NOT EXISTS user_answers 
                  (user_id INTEGER, message_id INTEGER, status TEXT, PRIMARY KEY (user_id, message_id))''', commit=True)
+    await db.execute('''CREATE TABLE IF NOT EXISTS answer_events
+                 (user_id INTEGER, message_id INTEGER, points INTEGER DEFAULT 0, is_correct INTEGER DEFAULT 0, ts INTEGER, PRIMARY KEY (user_id, message_id))''', commit=True)
     await db.execute('''CREATE TABLE IF NOT EXISTS global_used_quizzes 
                  (quiz_id INTEGER PRIMARY KEY)''', commit=True)
     await db.execute('''CREATE TABLE IF NOT EXISTS greeted_users 
@@ -140,6 +142,31 @@ async def get_answer_status(user_id, message_id):
 async def record_answer(user_id, message_id, status):
     await db.execute("INSERT OR REPLACE INTO user_answers (user_id, message_id, status) VALUES (?, ?, ?)", 
               (user_id, message_id, status), commit=True)
+
+async def record_answer_event(user_id, message_id, points, is_correct):
+    ts = int(get_now().timestamp())
+    await db.execute(
+        "INSERT OR IGNORE INTO answer_events (user_id, message_id, points, is_correct, ts) VALUES (?, ?, ?, ?, ?)",
+        (user_id, message_id, points, 1 if is_correct else 0, ts),
+        commit=True
+    )
+
+async def get_top_last_24h(limit=5):
+    since_ts = int(get_now().timestamp()) - 86400
+    placeholders = ','.join(['?'] * len(config.EXCLUDE_IDS))
+    query = f"""
+        SELECT user_id,
+               COALESCE(SUM(points), 0) AS pts,
+               COALESCE(SUM(is_correct), 0) AS correct_cnt,
+               COUNT(*) AS total_cnt
+        FROM answer_events
+        WHERE ts >= ?
+          AND user_id NOT IN ({placeholders})
+        GROUP BY user_id
+        ORDER BY pts DESC, correct_cnt DESC, total_cnt DESC
+        LIMIT ?
+    """
+    return await db.execute(query, (since_ts, *config.EXCLUDE_IDS, limit))
 
 def get_rank(score):
     for threshold, name in config.RANKS:
@@ -293,9 +320,29 @@ async def get_cached_user_name(user_id):
 async def update_live_leaderboard():
     """Обновляет закрепленный пост с правилами и ТОП-лидерами"""
     try:
-        # Получаем ТОП (админы уже исключены в get_top_players)
-        top_limit = config.LIVE_LEADERBOARD_COUNT
-        top_players = await get_top_players(limit=top_limit)
+        state = get_bot_state()
+        pinned_message_id = state.get("pinned_message_id") or config.PINNED_MESSAGE_ID
+
+        async def resolve_pinned_message_id():
+            try:
+                chat = await bot.get_chat(config.CHANNEL_ID)
+                pm = getattr(chat, "pinned_message", None)
+                if pm and getattr(pm, "message_id", None):
+                    return pm.message_id
+            except Exception:
+                return None
+            return None
+
+        async def resolve_channel_id():
+            try:
+                chat = await bot.get_chat(config.CHANNEL_ID)
+                return chat.id
+            except Exception:
+                return config.CHANNEL_ID
+
+        chat_id = await resolve_channel_id()
+
+        top_players = await get_top_players(limit=3)
         
         # Группируем игроков с одинаковыми баллами
         score_groups = {}
@@ -307,11 +354,11 @@ async def update_live_leaderboard():
         # Сортируем баллы по убыванию
         sorted_scores = sorted(score_groups.keys(), reverse=True)
         
-        leaderboard_text = "\n"
+        leaderboard_text = "<b>🏆 ТОП-3 ЛИДЕРОВ</b>\n\n"
         medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"] # Медали для ТОП-10
         
         for i, score in enumerate(sorted_scores):
-            if i >= top_limit: break
+            if i >= 3: break
             uids = score_groups[score]
             names = []
             total_streak = 0
@@ -332,7 +379,19 @@ async def update_live_leaderboard():
             leaderboard_text += f"<blockquote><b>{i+1} место:</b> {combined_names}\n{stats_line}</blockquote>\n\n"
 
         if not top_players:
-            leaderboard_text = "\n<i>Список лидеров пока пуст. Стань первым!</i>"
+            leaderboard_text = "<b>🏆 ТОП-3 ЛИДЕРОВ</b>\n\n<i>Список лидеров пока пуст. Стань первым!</i>\n\n"
+
+        top_today = await get_top_last_24h(limit=5)
+        leaderboard_text += "<b>⚡️ ТОП ЗА 24 ЧАСА</b>\n\n"
+        if not top_today:
+            leaderboard_text += "<i>Пока нет активности за последние 24 часа.</i>\n\n"
+        else:
+            for i, (uid, pts, correct_cnt, total_cnt) in enumerate(top_today, 1):
+                name = await get_cached_user_name(uid)
+                u_res = await db.execute("SELECT score, streak FROM users WHERE user_id = ?", (uid,))
+                streak = u_res[0][1] if u_res else 0
+                leaderboard_text += f"{i}. {name} — ⭐️ {format_number(pts)} (🔥 {format_number(streak)})\n"
+            leaderboard_text += "\n"
 
         # Следующее обновление по корейскому времени
         next_update = get_next_leaderboard_update().strftime('%H:%M')
@@ -348,56 +407,62 @@ async def update_live_leaderboard():
         # Кнопка "Мой рейтинг"
         kb = InlineKeyboardBuilder()
         kb.row(InlineKeyboardButton(text="🏆 МОЙ РЕЙТИНГ", callback_data="show_my_rank", style="success"))
-        
-        # Проверяем, существует ли пост, прежде чем редактировать
-        try:
-            # Сначала пробуем редактировать как ТЕКСТОВОЕ сообщение
-            await bot.edit_message_text(
-                chat_id=config.CHANNEL_ID,
-                message_id=config.PINNED_MESSAGE_ID,
-                text=final_text,
-                parse_mode="HTML",
-                reply_markup=kb.as_markup()
-            )
-            print(f"[{get_now()}] Закрепленный пост (текст) успешно обновлен.")
-        except TelegramBadRequest as e:
-            if "message is not modified" in str(e):
-                pass
-            elif "there is no text in the message" in str(e) or "message can't be edited" in str(e):
-                # Если это не текст (например, фото), пробуем редактировать ОПИСАНИЕ (caption)
-                try:
-                    await bot.edit_message_caption(
-                        chat_id=config.CHANNEL_ID,
-                        message_id=config.PINNED_MESSAGE_ID,
-                        caption=final_text,
-                        parse_mode="HTML",
-                        reply_markup=kb.as_markup()
-                    )
-                    print(f"[{get_now()}] Закрепленный пост (фото/caption) успешно обновлен.")
-                except TelegramBadRequest as e2:
-                    if "message is not modified" in str(e2): pass
-                    else: print(f"Ошибка редактирования caption: {e2}")
-            elif "message to edit not found" in str(e):
-                # Если пост не найден, отправляем НОВОЕ ФОТО с правилами
-                print(f"⚠️ Пост {config.PINNED_MESSAGE_ID} не найден. Отправляю новый с картинкой TITLE.jpg...")
-                if os.path.exists(config.TITLE_IMAGE_PATH):
-                    new_msg = await bot.send_photo(
-                        chat_id=config.CHANNEL_ID,
-                        photo=FSInputFile(config.TITLE_IMAGE_PATH),
-                        caption=final_text,
-                        parse_mode="HTML",
-                        reply_markup=kb.as_markup()
-                    )
-                else:
-                    new_msg = await bot.send_message(
-                        chat_id=config.CHANNEL_ID,
-                        text=final_text,
-                        parse_mode="HTML",
-                        reply_markup=kb.as_markup()
-                    )
-                print(f"✅ Новый пост отправлен! ID: {new_msg.message_id}. Обновите PINNED_MESSAGE_ID в config.py")
-            else:
-                print(f"Ошибка редактирования закрепа: {e}")
+
+        async def try_update(message_id: int) -> bool:
+            text_err = None
+            caption_err = None
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=final_text,
+                    parse_mode="HTML",
+                    reply_markup=kb.as_markup()
+                )
+                return True
+            except TelegramBadRequest as e:
+                text_err = str(e)
+
+            try:
+                await bot.edit_message_caption(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    caption=final_text,
+                    parse_mode="HTML",
+                    reply_markup=kb.as_markup()
+                )
+                return True
+            except TelegramBadRequest as e:
+                caption_err = str(e)
+                if "MEDIA_CAPTION_TOO_LONG" in str(e):
+                    try:
+                        await bot.edit_message_caption(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            caption=final_text[:1024],
+                            parse_mode="HTML",
+                            reply_markup=kb.as_markup()
+                        )
+                        return True
+                    except TelegramBadRequest:
+                        return False
+                print(f"⚠️ Не удалось обновить закреп (text_err={text_err}, caption_err={caption_err})")
+                return False
+
+        if await try_update(pinned_message_id):
+            print(f"[{get_now()}] Закрепленный пост успешно обновлен.")
+            return
+
+        latest_pinned_id = await resolve_pinned_message_id()
+        if latest_pinned_id and latest_pinned_id != pinned_message_id:
+            pinned_message_id = latest_pinned_id
+            state["pinned_message_id"] = pinned_message_id
+            save_bot_state(state)
+            if await try_update(pinned_message_id):
+                print(f"[{get_now()}] Закрепленный пост успешно обновлен.")
+                return
+
+        print(f"⚠️ Не удалось обновить закреп: MESSAGE_ID_INVALID.")
     except Exception as e:
         print(f"Критическая ошибка update_live_leaderboard: {e}")
 
@@ -550,6 +615,7 @@ async def handle_click(c: types.CallbackQuery, callback_data: QuizCallback):
         new_streak = u['streak'] + 1
         bonus = 5 if new_streak % 5 == 0 else 0
         
+        await record_answer_event(user_id, message_id, points + bonus, True)
         await update_user(user_id, points + bonus)
         u = await get_user(user_id)
         
@@ -563,6 +629,7 @@ async def handle_click(c: types.CallbackQuery, callback_data: QuizCallback):
     else:
         # МГНОВЕННАЯ ЗАПИСЬ ОТВЕТА для предотвращения двойного нажатия
         await record_answer(user_id, message_id, "wrong")
+        await record_answer_event(user_id, message_id, 0, False)
         await update_user(user_id, 0, reset_streak=True)
         u = await get_user(user_id)
         
