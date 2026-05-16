@@ -108,7 +108,7 @@ async def init_db():
     await db.execute('''CREATE TABLE IF NOT EXISTS user_answers 
                  (user_id INTEGER, message_id INTEGER, status TEXT, PRIMARY KEY (user_id, message_id))''', commit=True)
     await db.execute('''CREATE TABLE IF NOT EXISTS answer_events
-                 (user_id INTEGER, message_id INTEGER, points INTEGER DEFAULT 0, is_correct INTEGER DEFAULT 0, ts INTEGER, PRIMARY KEY (user_id, message_id))''', commit=True)
+                 (user_id INTEGER, chat_id INTEGER, message_id INTEGER, points INTEGER DEFAULT 0, is_correct INTEGER DEFAULT 0, ts INTEGER, PRIMARY KEY (user_id, chat_id, message_id))''', commit=True)
     await db.execute('''CREATE TABLE IF NOT EXISTS global_used_quizzes 
                  (quiz_id INTEGER PRIMARY KEY)''', commit=True)
     await db.execute('''CREATE TABLE IF NOT EXISTS greeted_users 
@@ -119,6 +119,21 @@ async def init_db():
     except: pass
     try: await db.execute("ALTER TABLE users ADD COLUMN max_streak INTEGER DEFAULT 0", commit=True)
     except: pass
+    try:
+        await db.execute("SELECT chat_id FROM answer_events LIMIT 1")
+    except:
+        try:
+            await db.execute("ALTER TABLE answer_events RENAME TO answer_events_old", commit=True)
+            await db.execute('''CREATE TABLE IF NOT EXISTS answer_events
+                         (user_id INTEGER, chat_id INTEGER, message_id INTEGER, points INTEGER DEFAULT 0, is_correct INTEGER DEFAULT 0, ts INTEGER, PRIMARY KEY (user_id, chat_id, message_id))''', commit=True)
+            await db.execute(
+                "INSERT OR IGNORE INTO answer_events (user_id, chat_id, message_id, points, is_correct, ts) "
+                "SELECT user_id, 0, message_id, points, is_correct, ts FROM answer_events_old",
+                commit=True
+            )
+            await db.execute("DROP TABLE answer_events_old", commit=True)
+        except:
+            pass
 
 async def get_user(user_id):
     res = await db.execute("SELECT score, streak, max_streak FROM users WHERE user_id = ?", (user_id,))
@@ -143,15 +158,15 @@ async def record_answer(user_id, message_id, status):
     await db.execute("INSERT OR REPLACE INTO user_answers (user_id, message_id, status) VALUES (?, ?, ?)", 
               (user_id, message_id, status), commit=True)
 
-async def record_answer_event(user_id, message_id, points, is_correct):
+async def record_answer_event(user_id, chat_id, message_id, points, is_correct):
     ts = int(get_now().timestamp())
     await db.execute(
-        "INSERT OR IGNORE INTO answer_events (user_id, message_id, points, is_correct, ts) VALUES (?, ?, ?, ?, ?)",
-        (user_id, message_id, points, 1 if is_correct else 0, ts),
+        "INSERT OR IGNORE INTO answer_events (user_id, chat_id, message_id, points, is_correct, ts) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, chat_id, message_id, points, 1 if is_correct else 0, ts),
         commit=True
     )
 
-async def get_top_last_24h(limit=5):
+async def get_top_last_24h(chat_id, limit=5):
     since_ts = int(get_now().timestamp()) - 86400
     placeholders = ','.join(['?'] * len(config.EXCLUDE_IDS))
     query = f"""
@@ -160,13 +175,18 @@ async def get_top_last_24h(limit=5):
                COALESCE(SUM(is_correct), 0) AS correct_cnt,
                COUNT(*) AS total_cnt
         FROM answer_events
-        WHERE ts >= ?
+        WHERE chat_id = ?
+          AND ts >= ?
           AND user_id NOT IN ({placeholders})
         GROUP BY user_id
         ORDER BY pts DESC, correct_cnt DESC, total_cnt DESC
         LIMIT ?
     """
-    return await db.execute(query, (since_ts, *config.EXCLUDE_IDS, limit))
+    return await db.execute(query, (chat_id, since_ts, *config.EXCLUDE_IDS, limit))
+
+async def cleanup_answer_events(retention_days=14):
+    cutoff = int(get_now().timestamp()) - int(retention_days) * 86400
+    await db.execute("DELETE FROM answer_events WHERE ts < ?", (cutoff,), commit=True)
 
 def get_rank(score):
     for threshold, name in config.RANKS:
@@ -381,7 +401,7 @@ async def update_live_leaderboard():
         if not top_players:
             leaderboard_text = "<b>🏆 ТОП-3 ЛИДЕРОВ</b>\n\n<i>Список лидеров пока пуст. Стань первым!</i>\n\n"
 
-        top_today = await get_top_last_24h(limit=5)
+        top_today = await get_top_last_24h(chat_id, limit=5)
         leaderboard_text += "<b>⚡️ ТОП ЗА 24 ЧАСА</b>\n\n"
         if not top_today:
             leaderboard_text += "<i>Пока нет активности за последние 24 часа.</i>\n\n"
@@ -580,6 +600,7 @@ async def get_quiz_data():
 @dp.callback_query(QuizCallback.filter())
 async def handle_click(c: types.CallbackQuery, callback_data: QuizCallback):
     user_id, message_id = c.from_user.id, c.message.message_id
+    event_chat_id = c.message.chat.id if c.message else 0
     
     # ЖЕСТКОЕ ПРАВИЛО: Админы ПОЛУЧАЮТ баллы (для тестов), но ИСКЛЮЧЕНЫ из рейтингов (в get_top_players)
     # Удаляем запрет на начисление для EXCLUDE_IDS
@@ -615,7 +636,7 @@ async def handle_click(c: types.CallbackQuery, callback_data: QuizCallback):
         new_streak = u['streak'] + 1
         bonus = 5 if new_streak % 5 == 0 else 0
         
-        await record_answer_event(user_id, message_id, points + bonus, True)
+        await record_answer_event(user_id, event_chat_id, message_id, points + bonus, True)
         await update_user(user_id, points + bonus)
         u = await get_user(user_id)
         
@@ -629,7 +650,7 @@ async def handle_click(c: types.CallbackQuery, callback_data: QuizCallback):
     else:
         # МГНОВЕННАЯ ЗАПИСЬ ОТВЕТА для предотвращения двойного нажатия
         await record_answer(user_id, message_id, "wrong")
-        await record_answer_event(user_id, message_id, 0, False)
+        await record_answer_event(user_id, event_chat_id, message_id, 0, False)
         await update_user(user_id, 0, reset_streak=True)
         u = await get_user(user_id)
         
@@ -950,6 +971,15 @@ async def main():
         'interval',
         hours=config.UPDATE_INTERVAL_HOURS,
         id='update_leaderboard_job',
+        replace_existing=True
+    )
+
+    scheduler_obj.add_job(
+        cleanup_answer_events,
+        'cron',
+        hour=4,
+        minute=10,
+        id='cleanup_answer_events_job',
         replace_existing=True
     )
     

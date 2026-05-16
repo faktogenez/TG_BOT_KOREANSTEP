@@ -1,0 +1,15 @@
+[Unit]
+Description=KoreanStep Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tg_bot_korean
+EnvironmentFile=/opt/tg_bot_korean/.env
+ExecStart=/opt/tg_bot_korean/.venv/bin/python /opt/tg_bot_korean/main.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
